@@ -156,12 +156,12 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
       CUDA_CHECK(cudaMemset(recvBuff.get(), 0, config.nBytes));
     }
 
-    const int nIter = 10;
+    const int nIter = 30;
     CudaEvent start, stop;
 
     // Warmup
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 20; i++) {
       if (globalRank == 0) {
         NCCL_CHECK(ncclSend(
             sendBuff.get(), config.nBytes, ncclChar, 1, ncclComm_, stream_));
@@ -193,8 +193,7 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
     float avgTime_ms = totalTime_ms / nIter;
     timeUs = avgTime_ms * 1000.0f;
     // Unidirectional bandwidth: data transferred in one direction / time
-    float bandwidth_GBps = (config.nBytes / (1024.0f * 1024.0f * 1024.0f)) /
-        (avgTime_ms / 1000.0f);
+    float bandwidth_GBps = (config.nBytes / 1e9f) / (avgTime_ms / 1000.0f);
 
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
 
@@ -237,11 +236,11 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
                               : (void*)comms::pipes::benchmark::p2pRecv;
     cudaStream_t stream = isSend ? sendStream : recvStream;
 
-    const int nIter = 10;
+    const int nIter = 30;
 
     // Warmup
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 20; i++) {
       MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
       CUDA_CHECK(
           cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, stream));
@@ -264,8 +263,7 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
     float avgTime_ms = totalTime_ms / nIter;
     timeUs = avgTime_ms * 1000.0f;
     // Unidirectional bandwidth: data transferred in one direction / time
-    float bandwidth_GBps = (config.nBytes / (1024.0f * 1024.0f * 1024.0f)) /
-        (avgTime_ms / 1000.0f);
+    float bandwidth_GBps = (config.nBytes / 1e9f) / (avgTime_ms / 1000.0f);
 
     CUDA_CHECK(cudaStreamDestroy(sendStream));
     CUDA_CHECK(cudaStreamDestroy(recvStream));
@@ -367,13 +365,13 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
 
     int peerRank = (globalRank == 0) ? 1 : 0;
 
-    const int nIter = 10;
+    const int nIter = 30;
     CudaEvent start, stop;
 
     // Warmup
     XLOGF(INFO, "Rank {}: NCCL bidi warmup starting", globalRank);
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 20; i++) {
       NCCL_CHECK(ncclGroupStart());
       NCCL_CHECK(ncclSend(
           sendBuff.get(),
@@ -424,8 +422,7 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
     timeUs = avgTime_ms * 1000.0f;
     // Bidirectional bandwidth: 2x data (send + recv) / time
     float bandwidth_GBps =
-        (2.0f * config.nBytes / (1024.0f * 1024.0f * 1024.0f)) /
-        (avgTime_ms / 1000.0f);
+        (2.0f * config.nBytes / 1e9f) / (avgTime_ms / 1000.0f);
 
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
 
@@ -463,11 +460,11 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
     void* args[] = {&p2p, &sendPtr, &recvPtr, &nBytes, &useBlockGroups};
     void* kernelFunc = (void*)comms::pipes::benchmark::p2pBidirectional;
 
-    const int nIter = 10;
+    const int nIter = 30;
 
     // Warmup - no reset needed, recv() signals -1 after each transfer
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 20; i++) {
       CUDA_CHECK(
           cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, nullptr));
       CUDA_CHECK(cudaDeviceSynchronize());
@@ -490,8 +487,7 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
     timeUs = avgTime_ms * 1000.0f;
     // Bidirectional bandwidth: 2x data (send + recv) / time
     float bandwidth_GBps =
-        (2.0f * config.nBytes / (1024.0f * 1024.0f * 1024.0f)) /
-        (avgTime_ms / 1000.0f);
+        (2.0f * config.nBytes / 1e9f) / (avgTime_ms / 1000.0f);
 
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
 
