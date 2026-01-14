@@ -89,6 +89,7 @@ struct BenchmarkConfig {
   std::size_t pipelineDepth = 4;
   std::size_t chunkSize = 512 * 1024; // 512KB default
   bool useBlockGroups = false; // Use block-level groups instead of warp-level
+  bool clusteredLaunch = false; // Use clustered kernel launch (NCCL-like)
   std::string name;
 };
 
@@ -464,22 +465,67 @@ class P2pNvlBenchmarkFixture : public MpiBaseTestFixture {
 
     // Warmup - no reset needed, recv() signals -1 after each transfer
     MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-    for (int i = 0; i < 20; i++) {
-      CUDA_CHECK(
-          cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, nullptr));
+
+    if (config.clusteredLaunch) {
+      // Set up clustered launch with cluster size
+      const int kClusterSize = 4;
+      CUDA_CHECK(cudaFuncSetAttribute(
+          (void*)comms::pipes::benchmark::p2pBidirectional,
+          cudaFuncAttributeNonPortableClusterSizeAllowed,
+          1));
+
+      cudaLaunchConfig_t launchConfig = {};
+      launchConfig.gridDim = gridDim;
+      launchConfig.blockDim = blockDim;
+      launchConfig.dynamicSmemBytes = 0;
+      launchConfig.stream = nullptr;
+
+      // Match NCCL's launch attributes for fair comparison
+      cudaLaunchAttribute attrs[2];
+      attrs[0].id = cudaLaunchAttributeClusterDimension;
+      attrs[0].val.clusterDim.x = kClusterSize;
+      attrs[0].val.clusterDim.y = 1;
+      attrs[0].val.clusterDim.z = 1;
+      // Spread clusters across GPCs for better load balancing (like NCCL)
+      attrs[1].id = cudaLaunchAttributeClusterSchedulingPolicyPreference;
+      attrs[1].val.clusterSchedulingPolicyPreference =
+          cudaClusterSchedulingPolicySpread;
+      launchConfig.attrs = attrs;
+      launchConfig.numAttrs = 2;
+
+      for (int i = 0; i < 20; i++) {
+        CUDA_CHECK(cudaLaunchKernelExC(&launchConfig, kernelFunc, args));
+        CUDA_CHECK(cudaDeviceSynchronize());
+      }
+      MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
+
+      // Benchmark - measure time across all iterations
+      // No barrier between iterations - ChunkState provides synchronization
+      CUDA_CHECK(cudaEventRecord(start.get()));
+      for (int i = 0; i < nIter; i++) {
+        CUDA_CHECK(cudaLaunchKernelExC(&launchConfig, kernelFunc, args));
+      }
+      CUDA_CHECK(cudaEventRecord(stop.get()));
+      CUDA_CHECK(cudaDeviceSynchronize());
+    } else {
+      // Standard kernel launch
+      for (int i = 0; i < 20; i++) {
+        CUDA_CHECK(
+            cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, nullptr));
+        CUDA_CHECK(cudaDeviceSynchronize());
+      }
+      MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
+
+      // Benchmark - measure time across all iterations
+      // No barrier between iterations - ChunkState provides synchronization
+      CUDA_CHECK(cudaEventRecord(start.get()));
+      for (int i = 0; i < nIter; i++) {
+        CUDA_CHECK(
+            cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, nullptr));
+      }
+      CUDA_CHECK(cudaEventRecord(stop.get()));
       CUDA_CHECK(cudaDeviceSynchronize());
     }
-    MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
-
-    // Benchmark - measure time across all iterations
-    // No barrier between iterations - ChunkState provides synchronization
-    CUDA_CHECK(cudaEventRecord(start.get()));
-    for (int i = 0; i < nIter; i++) {
-      CUDA_CHECK(
-          cudaLaunchKernel(kernelFunc, gridDim, blockDim, args, 0, nullptr));
-    }
-    CUDA_CHECK(cudaEventRecord(stop.get()));
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     float totalTime_ms = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&totalTime_ms, start.get(), stop.get()));
@@ -802,6 +848,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 32 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_32M_16B_Warp",
   });
 
@@ -814,6 +861,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 32 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_64M_16B_Warp",
   });
 
@@ -826,6 +874,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 32 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_128M_16B_Warp",
   });
 
@@ -838,6 +887,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 32 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_256M_16B_Warp",
   });
 
@@ -850,6 +900,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 16 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_512M_32B_Warp",
   });
 
@@ -862,6 +913,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 16 * 1024,
       .useBlockGroups = false,
+      .clusteredLaunch = true,
       .name = "NCCL_1G_32B_Warp",
   });
 
@@ -876,6 +928,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 1024 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_32M_16B_Block",
   });
 
@@ -888,6 +941,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 1024 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_64M_16B_Block",
   });
 
@@ -900,6 +954,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 1024 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_128M_16B_Block",
   });
 
@@ -912,6 +967,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 1024 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_256M_16B_Block",
   });
 
@@ -924,6 +980,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 512 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_512M_32B_Block",
   });
 
@@ -936,6 +993,7 @@ TEST_F(P2pNvlBenchmarkFixture, BidirectionalBenchmark) {
       .pipelineDepth = 2,
       .chunkSize = 512 * 1024,
       .useBlockGroups = true,
+      .clusteredLaunch = true,
       .name = "NCCL_1G_32B_Block",
   });
 
